@@ -19,6 +19,7 @@ def main():
         for directory in ('manager','image-kit'):
             subprocess.run([sys.executable,'-m','unittest','discover','-s','tests','-v'],cwd=ROOT/directory,check=True)
         subprocess.run(['node','--check','static/app.js'],cwd=ROOT/'manager',check=True)
+        subprocess.run(['node','--check','static/rooms.js'],cwd=ROOT/'manager',check=True)
         for test in sorted((ROOT/'manager/tests').glob('*.js')):
             subprocess.run(['node',str(test)],cwd=ROOT/'manager',check=True)
         return

@@ -25,6 +25,7 @@ from runtime import ModelRuntime, PORT as MODEL_PORT
 from prompt_enhancer import PromptEnhancer
 from transport import open_stream
 from external_chat import ExternalChatMixin
+from rooms import Rooms
 from telemetry import Telemetry
 import web_search
 import rag
@@ -89,6 +90,17 @@ class Manager(ExternalChatMixin):
             if self._job.get('cancel_reason'):
                 self._interrupt_worker(self._worker)
                 threading.Thread(target=self._finish_cancel, args=(self._worker,), daemon=True).start()
+        self.rooms = Rooms(self, self.store)
+
+    def room_binding(self):
+        """Metadata only: rooms pin the already selected engine, never load another."""
+        with self._mu:
+            self._reconcile()
+            if self._mode == 'external_chat':
+                return {'mode': 'external_chat', 'model': config.EXTERNAL_MODEL_ID}
+            if self._mode == 'model' and self._runtime.state == 'ready':
+                return {'mode': 'model', 'model': (self._runtime.model or {}).get('id')}
+            return None
 
     def _prompt_guard(self):
         enhancer = getattr(self, '_enhancer', None)
@@ -371,6 +383,8 @@ class Manager(ExternalChatMixin):
             mode = self._mode
             if mode not in ("external_chat", "model"):
                 raise ManagerError("Start a chat model first")
+            if spec.get('room_binding') and spec['room_binding'] != self.room_binding():
+                raise ManagerError('Room model changed; add the selected model as a new participant')
             if not hasattr(self, '_chat_requests'):
                 self._chat_requests = {}
             if getattr(self, '_cancelled_chats', {}).pop(request_id, 0) > time.monotonic():

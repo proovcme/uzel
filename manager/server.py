@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import sys
 import sqlite3
 import select
@@ -17,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import config
 from core import Manager, ManagerError
+from rooms.http import RoomHTTPMixin
 
 
 MANAGER: Manager
@@ -24,7 +26,7 @@ MAX_BODY = 4 * 1024 * 1024
 STATIC = config.ROOT / "static"
 
 
-class Handler(BaseHTTPRequestHandler):
+class Handler(RoomHTTPMixin, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def parse_request(self):
@@ -105,12 +107,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         try:
+            if path.startswith('/api/rooms') and self.rooms_get(MANAGER.rooms):
+                return
             if path == "/":
                 self._static("index.html", "text/html; charset=utf-8")
             elif path == "/app.css":
                 self._static("app.css", "text/css; charset=utf-8")
             elif path == "/app.js":
                 self._static("app.js", "text/javascript; charset=utf-8")
+            elif path == '/rooms.js':
+                self._static('rooms.js', 'text/javascript; charset=utf-8')
+            elif path == '/rooms.css':
+                self._static('rooms.css', 'text/css; charset=utf-8')
             elif path == "/api/status":
                 self._json(200, MANAGER.status())
             elif path == "/api/prompt/status":
@@ -144,6 +152,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._proxy("GET", path)
             else:
                 self._json(404, {"error": "Unknown route"})
+        except PermissionError as exc:
+            self._json(403, {'error': str(exc)})
         except (ValueError,TypeError) as exc:
             self._json(404, {"error": str(exc)})
         except ManagerError as exc:
@@ -159,6 +169,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
+            if path.startswith('/api/rooms') and self.rooms_post(MANAGER.rooms):
+                return
             if path == '/api/rag/connection':
                 self._json(200, MANAGER.rag.save(self._body()))
             elif path == '/api/rag/datasets':
@@ -209,6 +221,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._proxy("POST", path, self.rfile.read(length))
             else:
                 self._json(404, {"error": "Unknown route"})
+        except PermissionError as exc:
+            self._json(403, {'error': str(exc)})
         except ManagerError as exc:
             self._json(409, {"error": str(exc)})
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -293,7 +307,14 @@ def main() -> None:
     MANAGER = Manager()
     server = ThreadingHTTPServer((config.MANAGER_HOST, config.MANAGER_PORT), Handler)
     server.daemon_threads = True
-    server.serve_forever(poll_interval=0.5)
+    def terminate(_signum, _frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        server.serve_forever(poll_interval=0.5)
+    finally:
+        MANAGER.rooms.shutdown()
+        server.server_close()
 
 
 if __name__ == "__main__":

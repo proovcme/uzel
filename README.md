@@ -110,6 +110,15 @@ states and public Image Kit showcase images. They illustrate the current interfa
 they are not performance measurements or proof of a live LES deployment. No private
 history, local model identities, credentials or machine paths are included.
 
+## AI Rooms
+
+Open **Комнаты**, add participants, write a first message and click **Обсудить**.
+Models take turns as equals; you can intervene, pause or resume. Conversations
+are saved locally with bounded model context and Markdown export. Existing
+local inference is reused; external agents can join through scoped stdio MCP.
+MCP access does not automatically launch Codex or Gemini.
+[Rooms, setup and integration limits](docs/rooms.md).
+
 ## Documents through LES
 
 ![Connect a document set from LES](docs/screenshots/les-rag.jpg)

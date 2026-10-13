@@ -158,3 +158,10 @@ See [connection setup and MCP transport limits](../docs/les-rag.md).
 
 UZEL was previously named MLX Manager. Existing data directories and
 `MLX_MANAGER_*` settings remain compatible; new settings may use `UZEL_*`.
+
+## AI Rooms
+
+The **Комнаты** workspace adds persistent equal-participant discussions, live
+responses, time/turn limits, cancellation, Markdown export and scoped stdio MCP.
+It reuses the selected text runtime and does not start subscription CLIs.
+[Setup and limitations](../docs/rooms.md).
