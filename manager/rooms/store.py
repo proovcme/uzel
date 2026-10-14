@@ -190,6 +190,14 @@ class RoomStore:
                 rows = db.execute('SELECT * FROM room_messages WHERE room=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT ?', (room,before,before,count)).fetchall()[::-1]
         return [dict(row) for row in rows]
 
+    def agent_messages(self, room, after, count):
+        # Unlike UI history's tail-first default, MCP pages always move forward.
+        with self.connect() as db:
+            total = db.execute('SELECT COUNT(*) FROM room_messages WHERE room=?', (room,)).fetchone()[0]
+            rows = db.execute('SELECT id,author,content,state FROM room_messages '
+                              'WHERE room=? AND id>? ORDER BY id LIMIT ?', (room,after,count)).fetchall()
+        return [dict(row) for row in rows], total
+
     def events(self, room, after):
         with self.connect() as db:
             minimum = db.execute('SELECT MIN(id) FROM room_events WHERE room=?',(room,)).fetchone()[0]

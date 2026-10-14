@@ -1,0 +1,17 @@
+{
+  "name": "uzel",
+  "plugins": [
+    {
+      "name": "uzel-rooms",
+      "source": {
+        "source": "local",
+        "path": "./plugins/uzel-rooms"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

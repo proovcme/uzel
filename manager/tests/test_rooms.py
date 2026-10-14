@@ -1,6 +1,9 @@
 """Synthetic dispatcher fixtures; these tests do not claim real model acceptance."""
 import json
 import http.client
+import os
+import subprocess
+import sys
 from http.server import ThreadingHTTPServer
 import tempfile
 import threading
@@ -15,6 +18,7 @@ from rooms import Rooms
 from rooms.adapters import prepare, decode_sse, Invocation
 from rooms.store import limits, RoomStore
 from rooms import mcp
+from rooms.paging import PAGE_BYTES, encoded_size
 import server
 
 
@@ -151,6 +155,100 @@ class RoomsTests(unittest.TestCase):
             time.sleep(.01)
         self.rooms.control(key,dict(action='stop'));self.wait(key)
         self.assertIn('External',[m['author'] for m in self.rooms.store.messages(key)])
+    def test_mcp_wait_releases_mutex_and_returns_own_turn(self):
+        key=self.room();member=self.rooms.add_member(key,dict(name='External',kind='mcp'))
+        token=member['invite_token'];self.rooms.store.update(key,status='running')
+        ready=threading.Event()
+        def grant_turn():
+            with self.rooms.mu:
+                self.rooms.store.member_state(key,member['member']['id'],'waiting_external','real-turn')
+            ready.set()
+        timer=threading.Timer(.1,grant_turn);timer.start()
+        try:
+            value=self.rooms.agent(token,'room_wait',dict(timeout=2))
+            self.assertTrue(ready.is_set())
+            self.assertEqual(value['participant']['turn_id'],'real-turn')
+            self.assertFalse(value['timed_out'])
+        finally:timer.join()
+    def test_mcp_wait_timeout_stop_scope_and_revocation(self):
+        key=self.room();member=self.rooms.add_member(key,dict(name='External',kind='mcp'));token=member['invite_token']
+        self.rooms.store.update(key,status='running')
+        started=time.monotonic();value=self.rooms.agent(token,'room_wait',dict(timeout=1))
+        self.assertTrue(value['timed_out']);self.assertGreaterEqual(time.monotonic()-started,.9)
+        self.rooms.store.update(key,status='stopped')
+        self.assertFalse(self.rooms.agent(token,'room_wait',{})['timed_out'])
+        for timeout in (0,26,True,1.5):
+            with self.subTest(timeout=timeout),self.assertRaises(ValueError):self.rooms.agent(token,'room_wait',dict(timeout=timeout))
+        with self.assertRaises(PermissionError):self.rooms.agent(token,'room_wait',dict(room='other'))
+        self.rooms.store.update(key,status='running')
+        timer=threading.Timer(.1,lambda:self.rooms.remove_member(key,member['member']['id']));timer.start()
+        try:
+            with self.assertRaises(PermissionError):self.rooms.agent(token,'room_wait',dict(timeout=2))
+        finally:timer.join()
+    def test_mcp_pages_are_small_lossless_and_chronological(self):
+        key=self.room();other=self.room(title='Not in this credential')
+        token=self.rooms.add_member(key,dict(name='External',kind='mcp'))['invite_token']
+        self.rooms.post_user(other,dict(content='Not visible in this room'))
+        for i in range(106):self.rooms.post_user(key,dict(content=f'{i}: '+('Привет 🌲 "\\\n\t' * 7)))
+        self.rooms.post_user(key,dict(content='Long: '+('🌲я"\\\n'*2200)))
+        expected=self.rooms.store.agent_messages(key,0,1000)[0]
+        cursor={};pieces={};order=[];page_count=0
+        while True:
+            value=self.rooms.agent(token,'room_read',cursor)
+            page_count+=1
+            self.assertLessEqual(encoded_size(value),PAGE_BYTES)
+            with patch.object(mcp,'call',return_value=value):
+                wire=mcp.dispatch(dict(jsonrpc='2.0',id=99,method='tools/call',
+                    params=dict(name='room_read',arguments=cursor)),'unused','unused')
+            self.assertLessEqual(len(json.dumps(wire,ensure_ascii=False).encode()),4096)
+            self.assertEqual(value['total_messages'],len(expected))
+            self.assertNotIn('members',value['room'])
+            self.assertNotIn('config',value['participant'])
+            for message in value['messages']:
+                mid=message['id']
+                if mid not in pieces:pieces[mid]='';order.append(mid)
+                self.assertEqual(message['offset'],len(pieces[mid]))
+                pieces[mid]+=message['content']
+            if not value['has_more']:break
+            self.assertNotEqual(cursor,value['next_cursor'])
+            cursor=value['next_cursor']
+            self.assertLess(page_count,200)
+        self.assertEqual(order,[0]+[m['id'] for m in expected])
+        self.assertEqual(pieces.pop(0),self.rooms.store.get(key)['topic'])
+        self.assertEqual(pieces,{m['id']:m['content'] for m in expected})
+        empty=self.rooms.agent(token,'room_read',value['next_cursor'])
+        self.assertEqual(empty['messages'],[])
+        self.assertFalse(empty['has_more'])
+    def test_mcp_streaming_cursor_waits_for_final_content(self):
+        key=self.room();token=self.rooms.add_member(key,dict(name='External',kind='mcp'))['invite_token']
+        initial=self.rooms.agent(token,'room_read',{})
+        cursor=initial['next_cursor']
+        pending=self.rooms.store.append(key,'Alpha','Alpha','Partial','streaming')
+        later=self.rooms.store.append(key,'Beta','Beta','After pending')
+        waiting=self.rooms.agent(token,'room_read',cursor)
+        self.assertEqual(waiting['messages'],[])
+        self.assertEqual(waiting['next_cursor'],cursor)
+        self.assertTrue(waiting['waiting_for_message'])
+        self.assertFalse(waiting['has_more'])
+        self.rooms.store.revise(key,pending['id'],'Partial completed','done')
+        done=self.rooms.agent(token,'room_read',cursor)
+        self.assertEqual([m['content'] for m in done['messages']],['Partial completed','After pending'])
+        self.assertEqual(done['next_cursor'],dict(after=later['id'],offset=0))
+    def test_mcp_long_topic_and_invalid_page_cursors(self):
+        key=self.rooms.store.create(dict(title='🌲'*120,topic='🌲"\\\n'*500))['id']
+        token=self.rooms.add_member(key,dict(name='🌲'*80,kind='mcp'))['invite_token']
+        cursor={};topic=''
+        for _ in range(20):
+            value=self.rooms.agent(token,'room_read',cursor)
+            self.assertLessEqual(encoded_size(value),PAGE_BYTES)
+            topic+=''.join(m['content'] for m in value['messages'])
+            if not value['has_more']:break
+            cursor=value['next_cursor']
+        self.assertEqual(topic,self.rooms.store.get(key)['topic'])
+        self.assertLess(encoded_size(self.rooms.agent(token,'room_status',{})),PAGE_BYTES)
+        for args in ({'after':True},{'after':-2},{'offset':-1},{'offset':99999},
+                     {'after':99999,'offset':1},{'limit':0},{'limit':9},{'limit':True}):
+            with self.subTest(args=args),self.assertRaises(ValueError):self.rooms.agent(token,'room_read',args)
     def test_export_and_pagination(self):
         key=self.room()
         for i in range(105):self.rooms.post_user(key,dict(content='Message '+str(i)))
@@ -241,6 +339,35 @@ class RoomHTTPTests(unittest.TestCase):
         self.assertEqual(self.request('/api/rooms',dict(title='Blocked'),{'Origin':'https://example.invalid'})[0],403)
         self.assertEqual(self.request('/api/rooms',dict(title='Blocked'),{'Host':'example.invalid'})[0],403)
         self.assertEqual(self.rooms.store.list(),[])
+    def test_packaged_stdio_wait_read_post_and_private_connection(self):
+        key=self.rooms.store.create(dict(title='Packaged stdio fixture'))['id']
+        member=self.rooms.add_member(key,dict(name='Desktop',kind='mcp'));token=member['invite_token']
+        self.rooms.post_user(key,dict(content='Synthetic initial question'))
+        self.rooms.store.update(key,status='running')
+        self.rooms.store.member_state(key,member['member']['id'],'waiting_external','fixture-turn')
+        connection=Path(self.tmp.name)/'connection.json'
+        connection.write_text(json.dumps(dict(manager_url=f'http://127.0.0.1:{self.port}',room_token=token)))
+        connection.chmod(0o600)
+        requests=[dict(jsonrpc='2.0',id=1,method='initialize'),
+            dict(jsonrpc='2.0',id=2,method='tools/list')]
+        for number,(name,args) in enumerate((('room_wait',{}),('room_read',{}),
+            ('room_post',dict(content='Native bridge fixture reply',turn_id='fixture-turn'))),3):
+            requests.append(dict(jsonrpc='2.0',id=number,method='tools/call',params=dict(name=name,arguments=args)))
+        env={k:v for k,v in os.environ.items() if not k.startswith('UZEL_ROOM')}
+        env['UZEL_ROOMS_PLUGIN_CONFIG']=str(connection)
+        start=Path(__file__).resolve().parents[2]/'plugins/uzel-rooms/server/start.py'
+        result=subprocess.run([sys.executable,str(start)],input=''.join(json.dumps(r)+'\n' for r in requests),
+            text=True,capture_output=True,env=env,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertNotIn(token,result.stdout+result.stderr)
+        replies=[json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([r['id'] for r in replies],[1,2,3,4,5])
+        self.assertTrue(any(t['name']=='room_wait' for t in replies[1]['result']['tools']))
+        self.assertFalse(json.loads(replies[2]['result']['content'][0]['text'])['timed_out'])
+        page=json.loads(replies[3]['result']['content'][0]['text'])
+        self.assertFalse(page['has_more']);self.assertEqual(page['total_messages'],1)
+        self.assertFalse(replies[4]['result'].get('isError',False))
+        self.assertEqual(self.rooms.store.messages(key)[-1]['content'],'Native bridge fixture reply')
 
 
 class AdapterContractTests(unittest.TestCase):
@@ -259,9 +386,30 @@ class AdapterContractTests(unittest.TestCase):
         for value in ({'duration':False},{'max_turns':0},{'context_chars':1},{'unknown':3}):
             with self.subTest(value=value),self.assertRaises(ValueError):limits(value)
         names={t['name'] for t in mcp.tools()}
-        self.assertEqual(names,{'room_list','room_join','room_read','room_post','room_leave','room_status'})
+        self.assertEqual(names,{'room_list','room_join','room_read','room_post','room_leave','room_status','room_wait'})
         reply=mcp.dispatch(dict(jsonrpc='2.0',id=1,method='initialize'),'unused','unused')
         self.assertEqual(reply['result']['capabilities'],{'tools':{}})
+    def test_mcp_paging_arguments_and_compact_wire_result(self):
+        args=dict(after=17,offset=250,limit=2)
+        value=dict(messages=[dict(content='Привет 🌲')],next_cursor=dict(after=18,offset=0),has_more=False)
+        with patch.object(mcp,'call',return_value=value) as call:
+            reply=mcp.dispatch(dict(jsonrpc='2.0',id=3,method='tools/call',
+                params=dict(name='room_read',arguments=args)),'unused','unused')
+        self.assertEqual(call.call_args.args[-1],args)
+        self.assertEqual(json.loads(reply['result']['content'][0]['text']),value)
+        read=next(t for t in mcp.tools() if t['name']=='room_read')
+        self.assertIn('next_cursor',read['description'])
+        self.assertEqual(read['inputSchema']['properties']['after']['minimum'],-1)
+    def test_packaged_bridge_matches_manager(self):
+        root=Path(__file__).resolve().parents[2]
+        self.assertEqual((root/'plugins/uzel-rooms/server/rooms_mcp.py').read_bytes(),
+                         (root/'manager/rooms/mcp.py').read_bytes())
+        manifest=json.loads((root/'plugins/uzel-rooms/plugin.json').read_text())
+        compat=json.loads((root/'plugins/uzel-rooms/.codex-plugin/plugin.json').read_text())
+        self.assertEqual(manifest['version'],compat['version'])
+        self.assertEqual(manifest['version'],mcp.dispatch(dict(jsonrpc='2.0',id=1,method='initialize'),'','')['result']['serverInfo']['version'])
+        catalog=json.loads((root/'.agents/plugins/marketplace.json').read_text())
+        self.assertTrue((root/catalog['plugins'][0]['source']['path']/'plugin.json').is_file())
 
 
 if __name__=='__main__':unittest.main()

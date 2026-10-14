@@ -116,8 +116,10 @@ Open **Комнаты**, add participants, write a first message and click **О�
 Models take turns as equals; you can intervene, pause or resume. Conversations
 are saved locally with bounded model context and Markdown export. Existing
 local inference is reused; external agents can join through scoped stdio MCP.
-MCP access does not automatically launch Codex or Gemini.
-[Rooms, setup and integration limits](docs/rooms.md).
+The [local desktop plugin](plugins/uzel-rooms/) connects an active Codex/ChatGPT
+Work session; Gemini Desktop participation is verified in Antigravity mode.
+Paged reading and turn waiting keep replies inside the tools. An active client
+session is required. [Rooms, setup and integration limits](docs/rooms.md).
 
 ## Documents through LES
 

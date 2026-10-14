@@ -6,6 +6,7 @@ import uuid
 
 from . import adapters
 from .store import RoomStore, limits, text
+from .paging import read_page, summary, participant
 
 
 class Rooms:
@@ -256,13 +257,27 @@ class Rooms:
     def agent(self, token, operation, args):
         if not isinstance(args,dict):
             raise ValueError('Invalid room operation arguments')
+        if operation == 'room_wait':
+            timeout = args.get('timeout', 20)
+            if type(timeout) is not int or not 1 <= timeout <= 25:
+                raise ValueError('Wait timeout must be between 1 and 25 seconds')
+            deadline = time.monotonic()+timeout
+            while True:
+                # Do not hold the dispatcher mutex while waiting for its next turn.
+                # Reauthenticate every check: removal/revocation takes effect here too.
+                value = self.agent(token, 'room_status', {k:v for k,v in args.items() if k == 'room'})
+                ready = value['participant']['state'] == 'waiting_external' and bool(value['participant']['turn_id'])
+                if ready or value['room']['status'] != 'running' or time.monotonic() >= deadline:
+                    value['timed_out'] = not ready and value['room']['status'] == 'running'
+                    return value
+                time.sleep(min(.2, max(0, deadline-time.monotonic())))
         with self.mu:
             member = self.store.authenticate(token)
             room = member['room']
             if args.get('room') not in (None,room):
                 raise PermissionError('Credential belongs to another room')
             if operation == 'room_list':
-                return {'rooms':[self.store.get(room)]}
+                return {'rooms':[summary(self.store.get(room))]}
             if operation == 'room_join':
                 self.store.membership(room,member['id'],True)
             elif operation == 'room_leave':
@@ -271,8 +286,7 @@ class Rooms:
             elif not member['enabled']:
                 raise PermissionError('Join the room first')
             elif operation == 'room_read':
-                return dict(messages=self.store.messages(room,after=args.get('after',0)),
-                            participant=member,room=self.store.get(room))
+                return read_page(self.store, self.store.get(room), member, args)
             elif operation == 'room_post':
                 turn = args.get('turn_id')
                 if not turn or turn != member['turn_id'] or member['state'] != 'waiting_external' or self.store.get(room)['status'] != 'running':
@@ -285,7 +299,7 @@ class Rooms:
                 if room in self.runs: self.runs[room]['wake'].set()
             elif operation != 'room_status':
                 raise ValueError('Unknown room operation')
-            return dict(participant=self.store.authenticate(token),room=self.store.get(room))
+            return dict(participant=participant(self.store.authenticate(token)),room=summary(self.store.get(room)))
 
     def shutdown(self):
         with self.mu:

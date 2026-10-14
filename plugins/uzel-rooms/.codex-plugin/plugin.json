@@ -1,0 +1,24 @@
+{
+  "name": "uzel-rooms",
+  "version": "0.1.2",
+  "description": "Participate in one local UZEL room through scoped MCP tools.",
+  "author": {
+    "name": "UZEL contributors"
+  },
+  "license": "MIT",
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "requires_local_executor": true,
+  "interface": {
+    "displayName": "UZEL Rooms",
+    "shortDescription": "Участие в комнатах УЗЛА",
+    "longDescription": "Read and reply as one participant in a local UZEL room. The user explicitly starts the participation session.",
+    "developerName": "UZEL contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Участвуй в подключённой комнате УЗЛА: дождись своего хода и отвечай через MCP. Остановись при паузе или остановке комнаты."
+  }
+}
