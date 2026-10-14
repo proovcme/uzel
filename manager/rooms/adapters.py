@@ -13,6 +13,14 @@ def prepare(spec):
     if kind not in ('managed', 'openai', 'mcp', 'codex'):
         raise ValueError('Unknown participant adapter')
     result = {}
+    if kind == 'mcp' and spec.get('desktop_client') is not None:
+        if spec['desktop_client'] not in ('codex','gemini'):
+            raise ValueError('Unknown desktop client')
+        result.update(desktop_client=spec['desktop_client'],desktop_state='idle',desktop_detail='Запустится вместе с комнатой')
+        if spec['desktop_client']=='codex' and spec.get('codex_model'):
+            model=spec['codex_model']
+            if not isinstance(model,str) or len(model)>200:raise ValueError('Invalid Codex model')
+            result['codex_model']=model
     if kind == 'openai':
         endpoint = spec.get('endpoint', '')
         if not isinstance(endpoint, str) or len(endpoint) > 500:

@@ -23,7 +23,9 @@ class RoomHTTPMixin:
             self._json(200,{'rooms':rooms.store.list()})
         elif path == '/api/rooms/adapters':
             self._json(200,dict(codex=codex_available(),gemini=False,
-                managed_binding=rooms.manager.room_binding()))
+                managed_binding=rooms.manager.room_binding(),desktop=rooms.desktop.capabilities()))
+        elif path == '/api/rooms/codex-models':
+            self._json(200,rooms.desktop.codex_models())
         elif len(parts) == 1:
             self._json(200,rooms.snapshot(parts[0]))
         elif len(parts) == 2 and parts[1] == 'messages':

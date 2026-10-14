@@ -4,17 +4,19 @@
 
 ### Local model management on Apple Silicon
 
-A local toolkit for Apple Silicon — a model workbench and an image engine in one repository.
+Local models, images, and shared AI conversations in one workbench.
+Bring Codex, Gemini and a local model into a room: give them a question,
+follow the exchange, and join in whenever you want.
 
 ![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-MLX-b5dc78?labelColor=171c18)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-b5dc78?labelColor=171c18)
 ![License](https://img.shields.io/badge/License-MIT-b5dc78?labelColor=171c18)
 
-[Quick start](#quick-start) · [What's inside](#whats-inside) · [Screenshots](#screenshots) · [Русский](README.ru.md)
+[Quick start](#quick-start) · [AI Rooms](#ai-rooms) · [Screenshots](#screenshots) · [Русский](README.ru.md)
 
 </div>
 
-![A focused image workspace](docs/screenshots/image.jpg)
+![Three participants in a shared AI room](docs/screenshots/rooms.jpg)
 
 ## What's inside
 
@@ -22,22 +24,23 @@ A local toolkit for Apple Silicon — a model workbench and an image engine in o
 | --- | --- |
 | **[Manager](manager/README.md)** | Finds local models and oMLX / MLX LM engines. Starts a selected model, streams chats, saves conversations and drafts, displays image progress, and connects LES document retrieval. |
 | **[Image Kit](image-kit/README.md)** | Qwen Image 2.1 with a native 4-bit MLX loader. Interactive, direct and batch generation; optional denoising cache. |
+| **[AI Rooms](docs/rooms.md)** | Shared conversations with Codex, Gemini, local models and scoped MCP participants. Model selection, desktop launch, web sources, pause/resume and Markdown export. |
 | **[Launcher](run.py)** | `manager`, `image` and `check` from the toolkit root. |
 
-The two components keep their own code and tests. Image generation retains
-Image Kit's native Q4 loader and sampling settings; the manager adds exact
-conditioning reuse and resident series. Models and text inference
-engines are installed separately. Model weights are not included.
+Manager and Image Kit keep separate code and tests. Image generation retains
+the native Q4 loader and sampling settings, with exact conditioning reuse and
+resident series. Model weights and text inference engines are installed separately.
 
 ## Quick start
 
 Requires **macOS on Apple Silicon** and **Python 3.12+**.
 
-**Chat also requires a separately installed
+**Local model chat also requires a separately installed
 [MLX LM](https://github.com/ml-explore/mlx-lm) or
 [oMLX](https://github.com/jundot/omlx) engine and downloaded text-model weights.**
 The installation below includes Manager and Image Kit; text engines and model
-weights are not included.
+weights are not included. Desktop-only rooms need signed-in Codex and Gemini
+clients instead of a local text model.
 
 ```sh
 git clone https://github.com/proovcme/uzel.git
@@ -49,25 +52,18 @@ python3.12 -m venv .venv
 
 Open **http://127.0.0.1:1924/**. Select a model, click **Start**, and write a prompt.
 The composer switches between chat and image controls when you select a model.
+For a shared discussion, open **Комнаты**. If you only need chat and rooms,
+the `pip install ./image-kit` step is optional.
 
 For optional **web search with sources** in chat, install `.venv/bin/python -m pip install -r manager/requirements-web.txt` and enable it in the **⋯ menu beside the message field**. See [setup and privacy boundaries](docs/web-search.md).
 
-For text models, install **[oMLX](https://github.com/jundot/omlx)** or
-**[MLX LM](https://github.com/ml-explore/mlx-lm)** separately. The manager discovers
-existing executables on PATH, in Homebrew and in `uv tool` environments. Local
-models are found in the Hugging Face cache, `~/models`, `~/.omlx/models` and
-`~/.lmstudio/models`.
+Manager discovers installed text engines and model directories from runtime
+settings, environment variables and standard cache locations.
+[Discovery and extra model roots](docs/model-discovery.md).
 
-Image generation in the manager needs a complete cached
-`mlx-community/Qwen-Image-2.1-MLX-4bit` snapshot. To download missing weights
-through Image Kit and start its interactive CLI:
-
-```sh
-.venv/bin/python run.py image
-```
-
-Image Kit can download missing model files; the manager itself never downloads
-or starts a model implicitly. See [model and license details](image-kit/README.md#model-and-license).
+Images need a complete `mlx-community/Qwen-Image-2.1-MLX-4bit` snapshot.
+`run.py image` opens Image Kit and can download missing weights; Manager never
+downloads or starts a model implicitly. [Image setup and license](image-kit/README.md#model-and-license).
 
 ## Screenshots
 
@@ -105,21 +101,43 @@ PNG, reuse saved parameters or move gallery items to recoverable local trash.
 
 </details>
 
-All UI screenshots use an isolated demo service, synthetic chat/document/progress
+All UI screenshots use an isolated demo service, synthetic room/chat/document/progress
 states and public Image Kit showcase images. They illustrate the current interface;
 they are not performance measurements or proof of a live LES deployment. No private
 history, local model identities, credentials or machine paths are included.
 
 ## AI Rooms
 
-Open **Комнаты**, add participants, write a first message and click **Обсудить**.
-Models take turns as equals; you can intervene, pause or resume. Conversations
-are saved locally with bounded model context and Markdown export. Existing
-local inference is reused; external agents can join through scoped stdio MCP.
-The [local desktop plugin](plugins/uzel-rooms/) connects an active Codex/ChatGPT
-Work session; Gemini Desktop participation is verified in Antigravity mode.
-Paged reading and turn waiting keep replies inside the tools. An active client
-session is required. [Rooms, setup and integration limits](docs/rooms.md).
+Open **Комнаты**, choose **Codex + Gemini**, select a Codex model and write a first
+message. **Запустить участие** creates the participation sessions: Codex uses App
+Server, Gemini uses its Antigravity window on macOS. A local model is optional.
+Models take turns as equals; you can intervene, pause or resume. Add a local
+participant through the running engine or an explicit local endpoint. Enable web
+search to let MCP participants share source links and snippets with the room.
+Conversations stay on disk with bounded model context and Markdown export.
+Desktop participants send room context through their signed-in services;
+local storage does not make those participants offline.
+
+![Create a room and select a Codex model](docs/screenshots/rooms-create.jpg)
+
+Codex uses its existing ChatGPT sign-in and a model chosen from the live App
+Server catalog. Gemini requires Antigravity mode, Apple Command Line Tools, and
+Accessibility permission for the dedicated **UZEL Gemini** helper. Desktop
+launch is experimental: leave the Gemini window free during setup; a failed
+launch pauses the room and may require a retry. Short two-client and
+three-participant sessions passed; continuous 30-minute operation is unverified.
+
+The optional [local plugin](plugins/uzel-rooms/) connects an already active
+Codex/ChatGPT Work session through scoped MCP. MCP access alone does not wake
+an idle model. Room controls do not remove desktop-client usage limits.
+[Setup, requirements and integration boundaries](docs/rooms.md).
+
+<details>
+<summary>Rooms on mobile</summary>
+
+![Mobile room with participant status and readable replies](docs/screenshots/rooms-mobile.jpg)
+
+</details>
 
 ## Documents through LES
 
@@ -131,10 +149,8 @@ chooses search queries and reads retrieved context. Answers stream normally with
 collapsible source excerpts and original-document links using `[D1]` citations.
 An unavailable index or unsupported model produces an explicit error.
 
-Files, OCR, ingestion and indexing remain in LES. Manager does not copy the corpus,
-start LES or manage its embedding model. Direct API is the connection for the standard
-LES app; optional HTTP MCP requires a compatible gateway exposing `list_datasets`
-and `search_sources`. Its bundled stdio server is not launched by Manager.
+Files, OCR and indexing stay in LES. Manager connects to its API; optional HTTP
+MCP needs a compatible gateway. It does not start LES or copy the corpus.
 [Setup, API contract and privacy boundaries](docs/les-rag.md).
 
 ## From an idea to an image series
@@ -156,13 +172,10 @@ images stay in the gallery.
 .venv/bin/python run.py check           # both Python suites + SSE parser
 ```
 
-The check command runs both Python suites, JavaScript syntax and all JavaScript
-UI/streaming checks. It requires the installed Image Kit dependencies, downloads
-no models and starts no image benchmark. [CI](.github/workflows/checks.yml) checks
-the manager on Linux and image contracts on macOS. Metal parity checks explicitly
-skip on runners without a GPU. LES transport/tool tests use synthetic services;
-compatibility with an installed LES and a particular model must be verified separately.
-See the [installation and recovery checks](docs/reliability.md) for their scope.
+`check` runs both Python suites and the JavaScript checks, with no model downloads
+or image benchmark. Install Image Kit dependencies first. [CI](.github/workflows/checks.yml)
+tests Manager on Linux and image contracts on macOS; Metal tests skip without a GPU.
+[Validation scope and recovery checks](docs/reliability.md).
 
 ## Local by design
 

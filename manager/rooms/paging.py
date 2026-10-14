@@ -13,11 +13,14 @@ def encoded_size(value):
 
 
 def summary(snapshot):
-    return {key: snapshot[key] for key in ('id', 'title', 'status', 'reason', 'turns', 'remaining', 'limits')}
+    return {key: snapshot[key] for key in ('id', 'title', 'status', 'reason', 'turns', 'remaining', 'limits', 'web_search')}
 
 
-def participant(member):
-    return {key: member[key] for key in ('id', 'name', 'enabled', 'state', 'turn_id')}
+def participant(member, snapshot=None):
+    value={key: member[key] for key in ('id', 'name', 'enabled', 'state', 'turn_id')}
+    value['next_action']=('stop' if not member['enabled'] or snapshot and snapshot['status']!='running'
+        else 'reply' if member['state']=='waiting_external' and member['turn_id'] else 'wait')
+    return value
 
 
 def read_page(store, snapshot, member, args):
@@ -29,7 +32,7 @@ def read_page(store, snapshot, member, args):
     rows, total = store.agent_messages(snapshot['id'], max(0, after), limit+1)
     if after == -1:
         rows.insert(0, dict(id=0, author='Topic', content=snapshot['topic'], state='done'))
-    result = dict(participant=participant(member), room=summary(snapshot), messages=[],
+    result = dict(participant=participant(member,snapshot), room=summary(snapshot), messages=[],
                   next_cursor=dict(after=after, offset=offset), has_more=False,
                   total_messages=total, waiting_for_message=False)
     if offset and (not rows or offset >= len(rows[0]['content'])):

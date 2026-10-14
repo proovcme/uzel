@@ -39,7 +39,7 @@ class RoomStore:
                     status TEXT NOT NULL, reason TEXT NOT NULL, settings TEXT NOT NULL,
                     remaining REAL NOT NULL, turns INTEGER NOT NULL DEFAULT 0,
                     empty INTEGER NOT NULL DEFAULT 0, cursor INTEGER NOT NULL DEFAULT 0,
-                    updated REAL NOT NULL);
+                    updated REAL NOT NULL, web_search INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS room_members (
                     id TEXT PRIMARY KEY, room TEXT NOT NULL, name TEXT NOT NULL,
                     kind TEXT NOT NULL, config TEXT NOT NULL, token_hash TEXT UNIQUE,
@@ -56,6 +56,8 @@ class RoomStore:
                 CREATE INDEX IF NOT EXISTS room_member_room ON room_members(room);
                 CREATE UNIQUE INDEX IF NOT EXISTS room_member_name ON room_members(room,name) WHERE enabled=1;
             ''')
+            if 'web_search' not in {r['name'] for r in db.execute('PRAGMA table_info(rooms)')}:
+                db.execute('ALTER TABLE rooms ADD COLUMN web_search INTEGER NOT NULL DEFAULT 0')
             # Never silently restart conversations after a process exit.
             db.execute("UPDATE rooms SET status='paused',reason='restart' WHERE status='running'")
             db.execute("UPDATE room_messages SET state='interrupted' WHERE state='streaming'")
@@ -76,10 +78,12 @@ class RoomStore:
         title = text(spec.get('title'), 'room name', 120)
         topic = text(spec.get('topic', title), 'topic', 2000)
         settings = limits(spec.get('limits', {}))
+        if type(spec.get('web_search',False)) is not bool:
+            raise ValueError('Invalid web search permission')
         key = uuid.uuid4().hex
         with self.connect() as db:
-            db.execute('INSERT INTO rooms(id,title,topic,status,reason,settings,remaining,updated) '
-                       'VALUES (?,?,?,?,?,?,?,?)', (key,title,topic,'idle','',json.dumps(settings),settings['duration'],time.time()))
+            db.execute('INSERT INTO rooms(id,title,topic,status,reason,settings,remaining,updated,web_search) '
+                       'VALUES (?,?,?,?,?,?,?,?,?)', (key,title,topic,'idle','',json.dumps(settings),settings['duration'],time.time(),int(spec.get('web_search',False))))
         return self.get(key)
 
     def list(self):
@@ -93,6 +97,7 @@ class RoomStore:
             if row is None:
                 raise ValueError('Room not found')
             result = dict(row)
+            result['web_search'] = bool(result['web_search'])
             result['limits'] = json.loads(result.pop('settings'))
             result['members'] = [self.member(row) for row in db.execute(
                 'SELECT * FROM room_members WHERE room=? ORDER BY rowid', (key,))]
@@ -134,6 +139,25 @@ class RoomStore:
             raise PermissionError('Unknown participant credential')
         return self.member(row)
 
+    def rotate_invite(self, room, key):
+        token = secrets.token_urlsafe(32)
+        with self.connect() as db:
+            changed = db.execute("UPDATE room_members SET token_hash=? WHERE room=? AND id=? AND kind='mcp' AND enabled=1",
+                (hashlib.sha256(token.encode()).hexdigest(),room,key)).rowcount
+            if not changed: raise ValueError('Desktop participant not found')
+        return token
+
+    def desktop_state(self, room, key, phase, detail, **metadata):
+        if metadata.keys()-{'desktop_thread','desktop_model','desktop_transport'}:
+            raise ValueError('Invalid desktop metadata')
+        with self.connect() as db:
+            row = db.execute('SELECT config FROM room_members WHERE room=? AND id=?',(room,key)).fetchone()
+            if row is None: return
+            prepared = json.loads(row['config'])
+            prepared.update(desktop_state=phase,desktop_detail=detail,**metadata)
+            db.execute('UPDATE room_members SET config=? WHERE room=? AND id=?',(json.dumps(prepared),room,key))
+            self.event(db,room,'desktop_state',dict(id=key,desktop_state=phase,desktop_detail=detail,**metadata))
+
     def member_state(self, room, key, state, turn_id=None):
         with self.connect() as db:
             db.execute('UPDATE room_members SET state=?,turn_id=? WHERE room=? AND id=?', (state,turn_id,room,key))
@@ -144,6 +168,9 @@ class RoomStore:
             row = db.execute('SELECT * FROM room_members WHERE room=? AND id=?',(room,key)).fetchone()
             if row is None:
                 raise ValueError('Participant not found')
+            # Rejoining an enabled participant must preserve its pending turn.
+            if enabled and row['enabled']:
+                return
             if enabled and not row['enabled']:
                 if db.execute('SELECT COUNT(*) FROM room_members WHERE room=? AND enabled=1',(room,)).fetchone()[0] >= 12:
                     raise ValueError('Room participant limit: 12')
@@ -154,7 +181,7 @@ class RoomStore:
             self.event(db,room,'membership',dict(id=key,enabled=enabled))
 
     def update(self, room, **fields):
-        allowed = {'status','reason','remaining','turns','empty','cursor','settings'}
+        allowed = {'status','reason','remaining','turns','empty','cursor','settings','web_search','title','topic'}
         if not fields or fields.keys() - allowed:
             raise ValueError('Invalid room update')
         with self.connect() as db:

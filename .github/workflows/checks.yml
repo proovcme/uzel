@@ -29,6 +29,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Compile Gemini window helper (no UI automation in CI)
+        run: swiftc manager/rooms/gemini-launch.swift -o "$RUNNER_TEMP/uzel-gemini-launch"
       - run: python -m pip install ./image-kit
       - name: Image contracts (Metal parity runs only when a GPU is available)
         run: python -m unittest discover -s tests -v

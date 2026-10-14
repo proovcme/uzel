@@ -3,17 +3,22 @@
 [Русская документация](README.ru.md)
 
 A local workbench for MLX models on Apple Silicon: discover installed models,
-start one, chat with streaming, or generate images with visible progress.
+start one, chat with streaming, generate images with visible progress, or bring
+desktop agents and a local model into a shared discussion.
 The control plane uses Python's standard library and listens on loopback only.
 Models and inference engines remain separate installations.
 
 ## Run
 
-Requirements: macOS on Apple Silicon, Python 3.12+, and a locally installed
+Requirements: macOS on Apple Silicon and Python 3.12+. Local-model chat needs
 [oMLX](https://github.com/jundot/omlx) or
 [MLX LM](https://github.com/ml-explore/mlx-lm). The manager discovers executables
 on PATH, in Homebrew, and in existing `uv tool` environments. It never downloads
 models or starts one automatically at login.
+
+For desktop-only rooms, use signed-in Codex and Gemini clients. A local text
+engine is optional; Gemini window setup also needs Apple Command Line Tools
+and Accessibility permission for the **UZEL Gemini** helper.
 
 ```sh
 python3.12 server.py
@@ -35,6 +40,11 @@ paths are committed. Existing LaunchAgents are never overwritten.
 
 ## Everyday work
 
+- **Rooms:** choose Codex + Gemini and a Codex model, enter the first message,
+  then launch participation. Codex uses private-stdio App Server; Gemini uses
+  its Antigravity window. Add a local model or scoped MCP participant, share
+  web sources, pause/resume, set limits and export Markdown. Window launch is
+  experimental and may need a retry. [Setup and boundaries](../docs/rooms.md).
 - **Chats:** streaming text, a reasoning disclosure when the engine emits it,
   prompt-processing/thinking/answering states, elapsed time, and interruption.
   New Chat keeps previous conversations in the history selector.

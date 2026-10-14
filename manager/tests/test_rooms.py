@@ -20,6 +20,7 @@ from rooms.store import limits, RoomStore
 from rooms import mcp
 from rooms.paging import PAGE_BYTES, encoded_size
 import server
+from rooms.desktop import DesktopRooms, run_gemini
 
 
 class ScriptedInvocation:
@@ -257,11 +258,25 @@ class RoomsTests(unittest.TestCase):
         head=self.rooms.store.messages(key,before=tail[0]['id'])
         self.assertEqual(len(head),6)
         self.assertIn('Message 104',self.rooms.store.export(key))
-    def test_cannot_start_only_passive_mcp(self):
+    def test_two_mcp_participants_without_local_model_take_turns(self):
         key=self.rooms.store.create(dict(title='Passive'))['id']
-        for name in ('One','Two'):self.rooms.add_member(key,dict(name=name,kind='mcp'))
+        invites=[self.rooms.add_member(key,dict(name=name,kind='mcp')) for name in ('One','Two')]
         self.rooms.post_user(key,dict(content='topic'))
-        with self.assertRaises(ValueError):self.rooms.control(key,dict(action='start'))
+        self.rooms.control(key,dict(action='start',limits=dict(duration=30,max_turns=2)))
+        try:
+            for invite in invites:
+                value=self.rooms.agent(invite['invite_token'],'room_wait',dict(timeout=2))
+                self.assertEqual(value['participant']['state'],'waiting_external')
+                self.assertEqual(value['participant']['next_action'],'reply')
+                joined=self.rooms.agent(invite['invite_token'],'room_join',{})
+                self.assertEqual(joined['participant']['turn_id'],value['participant']['turn_id'])
+                self.assertEqual(joined['participant']['state'],'waiting_external')
+                self.rooms.agent(invite['invite_token'],'room_post',dict(content='Reply by '+value['participant']['name'],turn_id=value['participant']['turn_id']))
+            result=self.wait(key)
+            self.assertEqual(result['reason'],'turn_limit')
+            self.assertEqual([m['author'] for m in result['messages']],['Вы','One','Two'])
+            self.assertEqual(ScriptedInvocation.calls,[])
+        finally:self.rooms.control(key,dict(action='stop'))
     def test_removed_name_can_be_reused_without_old_token(self):
         key=self.room();p=self.rooms.add_member(key,dict(name='External',kind='mcp'))
         self.rooms.remove_member(key,p['member']['id']);q=self.rooms.add_member(key,dict(name='External',kind='mcp'))
@@ -304,6 +319,105 @@ class RoomsTests(unittest.TestCase):
         result=''.join(Invocation(self.manager,p,'own-request',threading.Event()).stream([dict(role='user',content='Hi')]))
         self.assertEqual(result,'Hello')
         self.assertEqual(self.manager.stream_chat.call_args.args[0]['room_binding'],p['config']['binding'])
+    def test_desktop_workspace_is_private_isolated_and_rotates_only_its_invite(self):
+        import tomllib
+        key=self.rooms.store.create(dict(title='Desktop fixture'))['id']
+        first=self.rooms.add_member(key,dict(name='Codex',kind='mcp',desktop_client='codex'))
+        second=self.rooms.add_member(key,dict(name='Gemini',kind='mcp',desktop_client='gemini'))
+        manual=self.rooms.add_member(key,dict(name='Manual',kind='mcp'))
+        room=self.rooms.store.get(key)
+        with patch('rooms.desktop.applications',return_value={'codex':'/Applications/TestCodex.app','gemini':'/Applications/TestGemini.app'}), \
+             patch('rooms.codex_server.binary',return_value='/test/codex'), \
+             patch('rooms.desktop.gemini_ready'), \
+             patch.object(self.rooms.desktop,'codex_models',return_value={'models':[{'id':'test-model'}],'default':'test-model'}):
+            jobs=self.rooms.desktop.prepare(room,room['members'])
+        self.assertEqual(len(jobs),2)
+        tokens=[]
+        for job in jobs:
+            workspace=Path(job['workspace']);p=workspace/'connection.json'
+            self.assertEqual(p.stat().st_mode&0o777,0o600)
+            connection=json.loads(p.read_text());tokens.append(connection['room_token'])
+            self.assertNotIn(connection['room_token'],job['prompt'])
+            value=self.rooms.agent(connection['room_token'],'room_join',{})
+            self.assertEqual(value['participant']['id'],job['member'])
+            config=tomllib.loads((workspace/'.codex/config.toml').read_text())
+            self.assertEqual(config['mcp_servers'][job['server_name']]['env']['UZEL_ROOMS_PLUGIN_CONFIG'],str(p))
+            self.assertTrue((workspace/'.agents/mcp_config.json').is_file())
+        self.assertNotEqual(tokens[0],tokens[1])
+        with self.assertRaises(PermissionError):self.rooms.agent(first['invite_token'],'room_status',{})
+        self.assertEqual(self.rooms.agent(manual['invite_token'],'room_status',{})['participant']['name'],'Manual')
+    def test_missing_desktop_app_does_not_start_room(self):
+        key=self.rooms.store.create(dict(title='Missing desktop'))['id']
+        for client in ('codex','gemini'):self.rooms.add_member(key,dict(name=client,kind='mcp',desktop_client=client))
+        self.rooms.post_user(key,dict(content='Initial question'))
+        with patch('rooms.desktop.applications',return_value={}),patch('rooms.codex_server.binary',return_value=None):
+            with self.assertRaises(ValueError):self.rooms.control(key,dict(action='start'))
+        self.assertEqual(self.rooms.store.get(key)['status'],'idle')
+        self.assertNotIn(key,self.rooms.runs)
+    def test_removing_desktop_member_pauses_shared_launch_for_remaining_members(self):
+        key=self.rooms.store.create(dict(title='Membership fixture'))['id']
+        members=[self.rooms.add_member(key,dict(name=name,kind='mcp',desktop_client='codex'))
+                 for name in ('Alpha','Beta','Gamma')]
+        self.rooms.post_user(key,dict(content='Synthetic question'))
+        with patch.object(self.rooms.desktop,'prepare',return_value=[]), \
+             patch.object(self.rooms.desktop,'cancel') as cancel:
+            self.rooms.control(key,dict(action='start'))
+            self.rooms.remove_member(key,members[0]['member']['id'])
+            value=self.wait(key,'paused')
+            cancel.assert_called_with(key)
+        self.assertEqual(value['reason'],'participants_changed')
+        self.assertEqual(sum(m['enabled'] for m in value['members']),2)
+    def test_launchservices_helper_uses_private_files_and_reads_result(self):
+        process=Mock();process.wait.return_value=0
+        def launch(args,**kwargs):
+            source=Path(args[args.index('--stdin')+1]);target=Path(args[args.index('--stdout')+1])
+            self.assertEqual(json.loads(source.read_text()),{'client':'probe'})
+            self.assertEqual(source.stat().st_mode&0o777,0o600)
+            self.assertEqual(target.stat().st_mode&0o777,0o600)
+            self.assertEqual(target.read_text(),'')  # open appends stdout
+            target.write_text('{"ok":true}')
+            return process
+        with patch('rooms.desktop.subprocess.Popen',side_effect=launch) as spawn:
+            result=run_gemini(Path('/test/UZEL Gemini.app/Contents/MacOS/helper'),{'client':'probe'})
+        self.assertEqual(result,{'ok':True})
+        self.assertEqual(spawn.call_args.args[0][:6],['/usr/bin/open','-n','-g','-W','-a','/test/UZEL Gemini.app'])
+    def test_cancel_only_owns_exact_launchservices_helper_instance(self):
+        process=Mock();process.poll.return_value=0
+        process.uzel_helper_command='/test/UZEL Gemini.app/Contents/MacOS/helper uzel-job-own'
+        listing='41 '+process.uzel_helper_command+'\n42 /Applications/Gemini.app/Contents/MacOS/Gemini\n43 /test/UZEL Gemini.app/Contents/MacOS/helper uzel-job-other\n'
+        with patch('rooms.desktop.subprocess.run',return_value=Mock(stdout=listing)), \
+             patch('rooms.desktop.os.kill') as kill,patch('rooms.desktop.time.sleep'):
+            DesktopRooms._terminate(process)
+        self.assertTrue(process.uzel_cancelled)
+        self.assertTrue(kill.called)
+        self.assertEqual({c.args[0] for c in kill.call_args_list},{41})
+    def test_room_search_needs_permission_and_own_turn_and_shares_sources(self):
+        key=self.room();member=self.rooms.add_member(key,dict(name='External',kind='mcp'));token=member['invite_token']
+        with patch('rooms.service.web_search.search') as search:
+            with self.assertRaises(PermissionError):self.rooms.agent(token,'room_search',dict(query='Public question'))
+            search.assert_not_called()
+        self.rooms.store.update(key,web_search=1,status='running')
+        with self.assertRaises(ValueError):self.rooms.agent(token,'room_search',dict(query='Public question'))
+        self.rooms.store.member_state(key,member['member']['id'],'waiting_external','search-turn')
+        found=dict(provider='fixture',searched_at='2026-10-14',sources=[dict(title='Public source',url='https://example.org/source',snippet='Synthetic evidence')])
+        with patch('rooms.service.web_search.search',return_value=found):
+            result=self.rooms.agent(token,'room_search',dict(query='Public question'))
+        self.assertEqual(result['sources'],found['sources'])
+        self.assertLessEqual(encoded_size(result),PAGE_BYTES)
+        shared=self.rooms.store.messages(key)[-1]
+        self.assertEqual(shared['author_id'],'web');self.assertIn('https://example.org/source',shared['content'])
+        with self.assertRaises(PermissionError):self.rooms.agent(token,'room_search',dict(room='other',query='Question'))
+    def test_room_search_cancelled_turn_does_not_publish_stale_sources(self):
+        key=self.room();member=self.rooms.add_member(key,dict(name='External',kind='mcp'));token=member['invite_token']
+        self.rooms.store.update(key,web_search=1,status='running')
+        self.rooms.store.member_state(key,member['member']['id'],'waiting_external','search-turn')
+        def finished(*args):
+            self.rooms.store.member_state(key,member['member']['id'],'waiting')
+            return dict(provider='fixture',searched_at='2026-10-14',sources=[dict(title='Public',url='https://example.org/',snippet='Evidence')])
+        before=len(self.rooms.store.messages(key))
+        with patch('rooms.service.web_search.search',side_effect=finished):
+            with self.assertRaises(ValueError):self.rooms.agent(token,'room_search',dict(query='Public question'))
+        self.assertEqual(len(self.rooms.store.messages(key)),before)
 
 
 class RoomHTTPTests(unittest.TestCase):
@@ -386,7 +500,7 @@ class AdapterContractTests(unittest.TestCase):
         for value in ({'duration':False},{'max_turns':0},{'context_chars':1},{'unknown':3}):
             with self.subTest(value=value),self.assertRaises(ValueError):limits(value)
         names={t['name'] for t in mcp.tools()}
-        self.assertEqual(names,{'room_list','room_join','room_read','room_post','room_leave','room_status','room_wait'})
+        self.assertEqual(names,{'room_list','room_join','room_read','room_post','room_leave','room_status','room_wait','room_search'})
         reply=mcp.dispatch(dict(jsonrpc='2.0',id=1,method='initialize'),'unused','unused')
         self.assertEqual(reply['result']['capabilities'],{'tools':{}})
     def test_mcp_paging_arguments_and_compact_wire_result(self):

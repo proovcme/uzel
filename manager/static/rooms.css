@@ -31,6 +31,7 @@ body.rooms-mode #model-sidebar { display:none; }
 #room-settings form { padding:16px 0; border-bottom:1px solid var(--edge); }
 #room-settings label,#room-create label { display:flex; flex-direction:column; gap:4px; margin:8px 0; }
 #room-remote-label { flex-direction:row!important; align-items:flex-start; }
+.room-checkbox { flex-direction:row!important; align-items:center; gap:8px!important; }
 #room-member-settings>div { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0; }
 #room-invite { padding-top:16px; }
 #room-invite-command { width:100%; }

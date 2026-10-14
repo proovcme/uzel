@@ -1,6 +1,6 @@
 {
   "name": "uzel-rooms",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Participate in one local UZEL room through scoped MCP tools.",
   "author": {
     "name": "UZEL contributors"

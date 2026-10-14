@@ -1,5 +1,23 @@
 # Installation and recovery checks
 
+## Rooms publication gate, 2026-10-14
+
+A clean export of the staged release passed 129 Manager Python tests, 60 Image
+Kit tests, all five JavaScript regression suites and syntax checks. The Gemini
+Swift helper compiled separately without launching UI automation. Image tests
+used the exported source, excluding unrelated local acceleration experiments.
+
+Secret scanning passed for the staged changes and all 25 pre-release commits.
+The exported text was also checked for private machine paths and model aliases;
+local documentation links and plugin/bridge consistency passed. Ten refreshed
+UI screenshots use isolated synthetic fixtures, with no EXIF metadata.
+
+The desktop launcher remains experimental. Short live two- and three-participant
+checks are documented [separately](benchmarks/desktop-mcp-2026-10-14.md); they do
+not establish long-duration stability or the factual correctness of replies.
+
+## Earlier installation checks
+
 Validated on Apple Silicon with Python 3.12. This is a fresh virtual environment
 and isolated user-data check on an existing Mac, not a test on a second physical
 Mac or a factory-reset machine.

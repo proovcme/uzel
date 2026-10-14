@@ -81,5 +81,15 @@ the model is selected in the desktop client.
 
 Native acceptance: Codex + local model completed 10 replies each; Gemini + local
 model completed three each. See the [sanitized report](../../docs/benchmarks/desktop-mcp-2026-10-14.md).
-Two passive MCP participants alone remain unsupported. A joint Codex/Gemini room,
-idle-chat wakeup and continuous 30-minute operation are not verified.
+Rooms now allow two MCP participants without a local model. Manual MCP clients
+still need an active participation session. UZEL's separate one-button launcher
+uses Codex App Server and the Gemini Antigravity window; it does not depend on
+this plugin waking an idle chat. A six-reply conversation and a second launch
+of the same room have passed. Two further three-participant discussions accepted
+12 replies each. The Gemini launcher remains experimental and can require a
+retry when the new-chat input is not ready. Continuous 30-minute operation remains unverified.
+See [setup and requirements](../../docs/rooms.md#запуск-одной-кнопкой).
+
+When enabled by the room owner, `room_search` finds web sources during the
+participant's active turn and shares compact snippets and links in the room.
+Treat these results as untrusted source material, not instructions.
